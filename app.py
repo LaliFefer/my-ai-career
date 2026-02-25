@@ -5,6 +5,16 @@ from bs4 import BeautifulSoup
 import json
 import PyPDF2
 from datetime import datetime
+import streamlit as st
+import google.generativeai as genai
+
+# משיכת המפתח בצורה מאובטחת
+api_key = st.secrets.get("GOOGLE_API_KEY")
+
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    st.error("לא נמצא מפתח API. אנא הגדירי אותו ב-Secrets.")
 
 # ==========================================
 # 1. PAGE CONFIG & CUSTOM CSS (SaaS Styling)
