@@ -6,133 +6,161 @@ import json
 import PyPDF2
 from datetime import datetime
 from streamlit_lottie import st_lottie
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 # ==========================================
-# 1. PAGE CONFIG & SECRETS
+# 1. הגדרות אבטחה וחיבור (Secrets Only)
 # ==========================================
-st.set_page_config(page_title="AI Career Assistant", page_icon="🚀", layout="wide")
-
-# הגדרות API ו-Email ב-Secrets
-if "GOOGLE_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-else:
-    st.error("🔑 מפתח API חסר ב-Secrets!")
+try:
+    # משיכת המפתחות מה-Secrets של השרת בלבד (אבטחה מקסימלית)
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    serpapi_key = st.secrets.get("SERPAPI_KEY", "")  # אופציונלי לחיפוש משרות
+    genai.configure(api_key=api_key)
+except Exception:
+    st.error("⚠️ שגיאה: מפתח ה-API לא נמצא ב-Secrets. אנא הגדר אותו בניהול האפליקציה.")
     st.stop()
 
-
 # ==========================================
-# 2. EMAIL LOGIC
+# 2. עיצוב דף ו-CSS (SaaS Style)
 # ==========================================
-def send_email(target_email, content):
-    try:
-        smtp_server = "smtp.gmail.com"
-        smtp_port = 587
-        sender_email = st.secrets["EMAIL_USER"]
-        sender_password = st.secrets["EMAIL_PASS"]
+st.set_page_config(page_title="CareerAssistant.ai Pro", page_icon="🚀", layout="wide")
 
-        msg = MIMEMultipart()
-        msg['From'] = sender_email
-        msg['To'] = target_email
-        msg['Subject'] = "קורות החיים המשופרים שלך מ-CareerAssistant.ai"
-
-        msg.attach(MIMEText(content, 'html'))
-
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(sender_email, sender_password)
-        server.send_message(msg)
-        server.quit()
-        return True
-    except Exception as e:
-        st.error(f"שגיאה בשליחת המייל: {e}")
-        return False
+st.markdown("""
+<style>
+    .metric-card {
+        background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+        padding: 25px;
+        border-radius: 15px;
+        text-align: center;
+        color: white;
+    }
+    .cv-add { color: #10b981; font-weight: bold; background-color: rgba(16,185,129,0.1); padding: 2px 5px; border-radius: 4px; }
+    .cv-del { color: #ef4444; text-decoration: line-through; background-color: rgba(239,68,68,0.1); padding: 2px 5px; border-radius: 4px; }
+</style>
+""", unsafe_allow_html=True)
 
 
-# ==========================================
-# 3. HELPERS & TOOLS
-# ==========================================
+# פונקציה לטעינת אנימציות
 def load_lottieurl(url):
-    r = requests.get(url)
-    return r.json() if r.status_code == 200 else None
-
-
-def extract_pdf_text(file) -> str:
     try:
-        reader = PyPDF2.PdfReader(file)
-        return "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        r = requests.get(url)
+        return r.json() if r.status_code == 200 else None
     except:
-        return "Error extracting PDF"
+        return None
 
 
-def fetch_job_details(url: str) -> str:
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        return "\n".join([p.get_text() for p in soup.find_all(['p', 'li'])])
-    except:
-        return "SCRAPE_FAILED"
+lottie_scan = load_lottieurl("https://assets5.lottiefiles.com/packages/lf20_5njpX6.json")
 
 
-def compare_skills(cv_text, job_desc):
-    model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
-    prompt = f"Analyze CV vs JD. Return JSON: {{'match_score': int, 'shared_skills': [], 'missing_keywords': [], 'role_relevance': str}}. CV: {cv_text} | JD: {job_desc}"
-    return json.loads(model.generate_content(prompt).text)
+# ==========================================
+# 3. פונקציות ליבה (MCP Tools)
+# ==========================================
+
+def extract_pdf_text(file):
+    reader = PyPDF2.PdfReader(file)
+    return "\n".join([page.extract_text() for page in reader.pages])
 
 
-def generate_tailored_cv(cv_text, job_desc):
+def search_jobs_serp(query):
+    """שימוש ב-SerpApi למציאת משרות (עוקף חסימות לינקדאין)"""
+    if not serpapi_key:
+        return None
+    url = "https://serpapi.com/search.json"
+    params = {
+        "engine": "google_jobs",
+        "q": query,
+        "hl": "en",
+        "api_key": serpapi_key
+    }
+    response = requests.get(url, params=params)
+    return response.json().get("jobs_results", [])
+
+
+def analyze_and_optimize(cv_text, job_desc):
     model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = f"Optimize CV for ATS. Use <span class='cv-add'></span> for additions. CV: {cv_text} | JD: {job_desc}"
-    return model.generate_content(prompt).text
+
+    # פרומפט משולב לניתוח ושיפור (חוסך זמן וקריאות API)
+    prompt = f"""
+    Act as a Senior Recruiter. Analyze this CV against the Job Description.
+    CV: {cv_text}
+    JD: {job_desc}
+
+    Return a JSON with:
+    1. "score": int 0-100
+    2. "missing": list of keywords
+    3. "strengths": list of skills
+    4. "optimized_summary": The rewritten summary with changes marked.
+    Use <span class='cv-add'>text</span> for additions and <span class='cv-del'>text</span> for deletions.
+    """
+    response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+    return json.loads(response.text)
 
 
 # ==========================================
-# 4. UI SETUP
+# 4. ממשק משתמש (GUI)
 # ==========================================
-if "job_history" not in st.session_state: st.session_state.job_history = []
-if "optimized_cv" not in st.session_state: st.session_state.optimized_cv = ""
 
-lottie_ai = load_lottieurl("https://assets5.lottiefiles.com/packages/lf20_5njpX6.json")
-st_lottie(lottie_ai, height=150)
-st.title("🚀 CareerAssistant.ai")
+# --- Sidebar (ללא הזנת API Key) ---
+with st.sidebar:
+    st_lottie(lottie_scan, height=120)
+    st.header("📄 מסמכי מקור")
+    uploaded_file = st.file_uploader("העלי קורות חיים (PDF)", type="pdf")
 
-# Tabs
-tab_search, tab_optimize, tab_history = st.tabs(["🔍 ניתוח", "✨ אופטימיזציה ומייל", "📜 היסטוריה"])
+    if uploaded_file and "cv_text" not in st.session_state:
+        st.session_state.cv_text = extract_pdf_text(uploaded_file)
+        st.success("קורות החיים נטענו!")
 
-with tab_search:
-    job_url = st.text_input("לינק למשרה")
-    cv_file = st.file_uploader("העלה CV (PDF)", type=['pdf'])
+# --- Main Tabs ---
+if "cv_text" not in st.session_state:
+    st.title("🚀 ברוכה הבאה ל-CareerAssistant.ai")
+    st.info("כדי להתחיל, העלי את קורות החיים שלך בתפריט הצדדי.")
+else:
+    tab1, tab2, tab3 = st.tabs(["🔍 חיפוש וניתוח", "📝 אופטימיזציה", "📜 היסטוריה"])
 
-    if st.button("⚡ ניתוח מהיר", type="primary"):
-        if cv_file and job_url:
-            with st.spinner("מנתח..."):
-                cv_text = extract_pdf_text(cv_file)
-                jd_text = fetch_job_details(job_url)
-                results = compare_skills(cv_text, jd_text)
-                st.session_state.optimized_cv = generate_tailored_cv(cv_text, jd_text)
-                st.session_state.job_history.append(
-                    {"date": datetime.now().strftime("%d/%m/%Y"), "score": results['match_score']})
+    with tab1:
+        st.subheader("מציאת משרה וניתוח התאמה")
+        job_query = st.text_input("חיפוש משרה (למשל: Python Developer Tel Aviv)")
 
-                st.metric("ציון התאמה", f"{results['match_score']}%")
-                st.write(f"**סיכום:** {results['role_relevance']}")
-        else:
-            st.warning("נא לספק לינק וקובץ.")
-
-with tab_optimize:
-    if st.session_state.optimized_cv:
-        st.markdown(st.session_state.optimized_cv, unsafe_allow_html=True)
+        if st.button("חפשי משרות") and serpapi_key:
+            jobs = search_jobs_serp(job_query)
+            for job in jobs[:3]:  # מציג 3 תוצאות ראשונות
+                with st.expander(f"{job['title']} - {job['company_name']}"):
+                    st.write(job.get("description", "")[:500] + "...")
+                    if st.button("נתח משרה זו", key=job['job_id']):
+                        st.session_state.current_jd = job.get("description", "")
 
         st.divider()
-        st.subheader("📬 שלח לי את התוצאה למייל")
-        user_email = st.text_input("כתובת אימייל")
-        if st.button("שלח עכשיו"):
-            if send_email(user_email, st.session_state.optimized_cv):
-                st.success("המייל נשלח בהצלחה!")
-    else:
-        st.info("הרץ ניתוח קודם.")
+        manual_jd = st.text_area("או הדביקי תיאור משרה כאן:", value=st.session_state.get("current_jd", ""))
 
-with tab_history:
-    st.table(st.session_state.job_history)
+        if st.button("⚡ הרץ סריקת התאמה", type="primary"):
+            with st.spinner("ה-AI מנתח נתונים..."):
+                results = analyze_and_optimize(st.session_state.cv_text, manual_jd)
+                st.session_state.last_results = results
+                st.rerun()
+
+    with tab2:
+        if "last_results" in st.session_state:
+            res = st.session_state.last_results
+
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.markdown(f"""<div class="metric-card">
+                    <p style="font-size:3rem; margin:0;">{res['score']}%</p>
+                    <p>ציון התאמה ATS</p>
+                </div>""", unsafe_allow_html=True)
+
+            with col2:
+                st.subheader("מילות מפתח חסרות")
+                st.write(", ".join(res['missing']))
+
+            st.divider()
+            st.subheader("הצעת שיפור לקורות חיים")
+            st.markdown(res['optimized_summary'], unsafe_allow_html=True)
+
+            # כפתור הורדה
+            clean_text = res['optimized_summary'].replace("<span class='cv-add'>", "").replace("</span>", "")
+            st.download_button("הורד גרסה משופרת (Text)", clean_text, "optimized_cv.txt")
+        else:
+            st.warning("בצעי ניתוח בלשונית החיפוש קודם לכן.")
+
+    with tab3:
+        st.write("היסטוריית הניתוחים שלך תופיע כאן בקרוב.")
